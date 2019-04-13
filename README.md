@@ -21,10 +21,10 @@ See *Known Issues* below for details on current limitations/issues
 See *Roadmap* for future tasks/wishlist items
 
 ## Tech Used
-- [hls.js](https://github.com/video-dev/hls.js) for browser HLS playback, and used to access remuxed chunks of mp4 data (for client-focused strategy)
-- [Golang](https://golang.org/) for server side components
-- [FFmpeg](https://ffmpeg.org/) for media transcoding
-- [Google Cloud Speech-to-Text API](https://cloud.google.com/speech-to-text/) - receives the chunks of mp4 data for transcription
+- [hls.js](https://github.com/video-dev/hls.js)
+- [Golang](https://golang.org/)
+- [FFmpeg](https://ffmpeg.org/)
+- [Google Cloud Speech-to-Text API](https://cloud.google.com/speech-to-text/)
 
 ## Instructions
 It's required to have a GCP service account setup
