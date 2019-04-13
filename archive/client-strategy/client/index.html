@@ -1,0 +1,166 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Adaptive Video Speech Recognition - Client Strategy</title>
+  <style type="text/css">
+    video {
+      max-width: 768px;
+      margin-bottom: 15px;
+    }
+
+    body {
+      font-family: Arial;
+    }
+
+    label {
+      margin-right: 10px;
+      font-weight: 700;
+      display: inline-block;
+      width: 150px;
+    }
+
+    input {
+      width: 300px;
+      font-size: 14px;
+      padding: 3px;
+      margin: 3px;
+    }
+
+    input[readonly] {
+      background-color: #f1f1f1;
+    }
+
+    button {
+      padding: 3px;
+      width: 50px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Live Adaptive Video Speech Recognition - Client Strategy</h1>
+  <video controls></video>
+
+  <div class="controls">
+    <label for="playback-source">Playback Source</label>
+    <input name="playback-source" type="text" placeholder="Enter an HLS playback source">
+    <button name="load">Load</button>
+  </div>
+
+  <div class="confidence">
+    <label for="current-time">Current Time</label>
+    <input name="current-time" type="text" readonly>
+    <br>
+
+    <label for="media-duration">Media Duration</label>
+    <input name="media-duration" type="text" readonly>
+    <br>
+
+    <label for="current-range">Current Range</label>
+    <input name="current-range" type="text" readonly>
+    <br>
+
+    <label for="range-confidence">Confidence</label>
+    <input name="range-confidence" type="text" readonly>
+    <br>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@0.12.2"></script>
+  <script src="./live-vsr.js"></script>
+
+  <script>
+    const videoEl = document.querySelector('video')
+    const elInput = document.querySelector('input[name="playback-source"]')
+    const elLoad  = document.querySelector('button[name="load"]')
+
+    const elStats = {
+      confidence: document.querySelector('input[name="range-confidence"]'),
+      range     : document.querySelector('input[name="current-range"]'),
+      duration  : document.querySelector('input[name="media-duration"]'),
+      time      : document.querySelector('input[name="current-time"]')
+    }
+
+    let _hls = null
+    let _metadataTrack = null
+    let _metadataWatcherStarted = false
+    let VSR = new VideoSpeechRecognition(videoEl, {
+      endpoint: 'ws://localhost:13000/speech-recognition',
+      headers : { 'Content-Type': 'audio/mp4' }
+    })
+
+    function loadSource () {
+      let source = elInput.value
+
+      _hls = new Hls()
+
+      _hls.on(Hls.Events.BUFFER_APPENDING, (event, data) => {
+        console.info('hls.js | Buffer appending...', event, data)
+        if (data.type !== 'audio' || !VSR) return
+
+        if (data.content === 'initSegment')
+          VSR.processHeader(data.data)
+        else
+          VSR.processData(data.data)
+      })
+
+      _hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        videoEl.play()
+          .then(() => VSR.start())
+          .catch(e => console.error('Playback failed', e))
+      })
+
+      _hls.attachMedia(videoEl)
+      _hls.loadSource(source)
+    }
+
+    function enableConfidenceWatcher () {
+      if (_metadataWatcherStarted) return
+
+      _metadataTrack.oncuechange = event => {
+        let track = event.target
+
+        // todo: display confidence for subsections rather than first portion
+        //       e.g. activeCues can have more than 1 cue
+        let cue = track.activeCues[0]
+
+        try {
+          let content = JSON.parse(cue.text)
+
+          elStats.range.value = JSON.stringify(content.range)
+          elStats.confidence.value = `${( content.confidence * 100 ).toFixed(2)}%`
+        } catch (e) { }
+      }
+
+      _metadataWatcherStarted = true
+    }
+
+    elLoad.addEventListener('click', loadSource)
+    videoEl.textTracks.addEventListener('change', event => {
+      let trackList = videoEl.textTracks
+
+      for (let i = 0; i < trackList.length; i++) {
+        let track = trackList[i]
+        if (track.kind === 'metadata') {
+          _metadataTrack = track
+          enableConfidenceWatcher()
+          return
+        }
+      }
+    })
+
+    videoEl.addEventListener('timeupdate', event => {
+      elStats.time.value = videoEl.currentTime.toFixed(3)
+    })
+
+    videoEl.addEventListener('durationchange', event => {
+      elStats.duration.value = videoEl.duration.toFixed(3)
+    })
+
+  </script>
+</body>
+</html>

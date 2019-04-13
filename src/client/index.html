@@ -1,0 +1,243 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Adaptive Video Speech Recognition - Server Strategy</title>
+  <style type="text/css">
+    video {
+      max-width: 768px;
+      margin-bottom: 15px;
+    }
+
+    body {
+      font-family: Arial;
+    }
+
+    label {
+      margin-right: 10px;
+      font-weight: 700;
+      display: inline-block;
+      width: 150px;
+    }
+
+    input {
+      width: 300px;
+      font-size: 14px;
+      padding: 3px;
+      margin: 3px;
+    }
+
+    input[readonly] {
+      background-color: #f1f1f1;
+    }
+
+    button {
+      padding: 3px;
+      width: 50px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Live Adaptive Video Speech Recognition - Server Strategy</h1>
+  <video controls></video>
+
+  <div class="controls">
+    <label for="playback-source">Playback Source</label>
+    <input name="playback-source" type="text" placeholder="Enter an HLS playback source" value="../server/tmp/content/master.m3u8">
+    <button name="load">Load</button>
+  </div>
+
+  <div class="confidence">
+    <label for="current-time">Current Time</label>
+    <input name="current-time" type="text" readonly>
+    <br>
+
+    <label for="media-duration">Media Duration</label>
+    <input name="media-duration" type="text" readonly>
+    <br>
+
+    <label for="current-range">Current Range</label>
+    <input name="current-range" type="text" readonly>
+    <br>
+
+    <label for="range-confidence">Confidence</label>
+    <input name="range-confidence" type="text" readonly>
+    <br>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@0.12.4"></script>
+  <script src="./live-vsr.js"></script>
+
+  <script>
+    const videoEl = document.querySelector('video')
+    const elInput = document.querySelector('input[name="playback-source"]')
+    const elLoad  = document.querySelector('button[name="load"]')
+
+    const elStats = {
+      confidence: document.querySelector('input[name="range-confidence"]'),
+      range     : document.querySelector('input[name="current-range"]'),
+      duration  : document.querySelector('input[name="media-duration"]'),
+      time      : document.querySelector('input[name="current-time"]')
+    }
+
+    let _hls = null
+    let _metadataTrack = null
+    let _metadataWatcherStarted = false
+
+    let VSR = new VideoSpeechRecognition(videoEl);
+    const segmentMap = {}
+
+    function loadSource () {
+      let source = elInput.value
+
+      _hls = new Hls()
+
+      _hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        VSR.start()
+        videoEl.play()
+          .catch(e => console.error('Playback failed', e))
+      })
+
+      _hls.on(Hls.Events.FRAG_PARSED, (ev, data) => {
+        const frag = data.frag
+
+        const isInitSegment = frag.relurl.indexOf('init') > -1
+        if (isInitSegment)
+          return
+
+        // If seen before previously - return existing promise
+        if (segmentMap[frag.sn]) {
+          console.log('[onHlsFragParsed] returning pre-existing transcription promise for ', frag)
+          return segmentMap[frag.sn].transcription
+        }
+
+        const transcription = getTranscriptForFragment(frag)
+                                    .then(transcript => {
+                                      return processTranscriptionForFragment(frag, transcript)
+                                    })
+                                    .catch(error => {
+                                      console.error('[onHlsFragParsed] error:', error)
+                                    })
+
+        // TODO ensure out-of-window pruning occurs
+        segmentMap[frag.sn] = {
+          transcription,
+          frag
+        }
+      })
+
+      _hls.attachMedia(videoEl)
+      _hls.loadSource(source)
+    }
+
+    function getTranscriptForFragment(fragment) {
+      // TODO refactor me
+      const finalUrl = `http://localhost:12000/src/server/tmp/content/0/${fragment.relurl}.json`
+
+      let intervalId = -1;
+      let timeoutId = -1
+      const timeout = new Promise((resolver, rejector) => {
+        const timeoutLimit = 15000  // 15 seconds
+        timeoutId = setTimeout(() => {
+          clearTimeout(intervalId)
+          intervalId = -1
+
+          rejector(`Timeout period of ${timeoutLimit} for resolution of ${finalUrl}`)
+        }, timeoutLimit)
+      })
+
+      const resolution = new Promise((resolver, rejector) => {
+          const handler = function () {
+            return fetch(finalUrl)
+              .then(resp => {
+                if (resp.status === 200)
+                  return resp.json()
+              })
+              .then(transcription => {
+                if (!transcription)
+                  return
+
+                clearInterval(intervalId)
+                intervalId = -1
+                resolver(transcription)
+                return transcription
+              })
+              .catch(err => {
+                console.warn('[getTranscriptForSegment] error', err)
+                clearInterval(intervalId)
+                intervalId = -1
+                rejector(err)
+                return err
+              })
+          }
+
+          intervalId = setInterval(handler, 1000)
+          handler()
+      })
+
+      return Promise.race([
+        timeout,
+        resolution
+      ])
+    }
+
+    function processTranscriptionForFragment(fragment, transcription) {
+      const range = {
+        start: fragment.startPTS,
+        end  : fragment.endPTS
+      }
+
+      VSR.processTranscriptionForRange(transcription, range)
+    }
+
+    function enableConfidenceWatcher () {
+      if (_metadataWatcherStarted) return
+
+      _metadataTrack.oncuechange = event => {
+        let track = event.target
+
+        // todo: display confidence for subsections rather than first portion
+        //       e.g. activeCues can have more than 1 cue
+        let cue = track.activeCues[0]
+
+        try {
+          let content = JSON.parse(cue.text)
+
+          elStats.range.value = JSON.stringify(content.range)
+          elStats.confidence.value = `${( content.confidence * 100 ).toFixed(2)}%`
+        } catch (e) { }
+      }
+
+      _metadataWatcherStarted = true
+    }
+
+    elLoad.addEventListener('click', loadSource)
+    videoEl.textTracks.addEventListener('change', event => {
+      let trackList = videoEl.textTracks
+
+      for (let i = 0; i < trackList.length; i++) {
+        let track = trackList[i]
+        if (track.kind === 'metadata') {
+          _metadataTrack = track
+          enableConfidenceWatcher()
+          return
+        }
+      }
+    })
+
+    videoEl.addEventListener('timeupdate', event => {
+      elStats.time.value = videoEl.currentTime.toFixed(3)
+    })
+
+    videoEl.addEventListener('durationchange', event => {
+      elStats.duration.value = videoEl.duration.toFixed(3)
+    })
+
+  </script>
+</body>
+</html>
