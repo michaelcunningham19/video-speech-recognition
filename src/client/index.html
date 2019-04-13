@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Adaptive Video Speech Recognition - Server Strategy</title>
+  <title>Live Adaptive Video Speech Recognition</title>
   <style type="text/css">
     video {
       max-width: 768px;
@@ -47,7 +47,7 @@
 
   <div class="controls">
     <label for="playback-source">Playback Source</label>
-    <input name="playback-source" type="text" placeholder="Enter an HLS playback source" value="../server/tmp/content/master.m3u8">
+    <input name="playback-source" type="text" placeholder="Enter an HLS playback source" value="../server/encoder/tmp/content/master.m3u8">
     <button name="load">Load</button>
   </div>
 
@@ -124,7 +124,6 @@
                                       console.error('[onHlsFragParsed] error:', error)
                                     })
 
-        // TODO ensure out-of-window pruning occurs
         segmentMap[frag.sn] = {
           transcription,
           frag
@@ -137,12 +136,12 @@
 
     function getTranscriptForFragment(fragment) {
       // TODO refactor me
-      const finalUrl = `http://localhost:12000/src/server/tmp/content/0/${fragment.relurl}.json`
+      const finalUrl = `http://localhost:12000/src/server/encoder/tmp/content/0/${fragment.relurl}.json`
 
       let intervalId = -1;
       let timeoutId = -1
       const timeout = new Promise((resolver, rejector) => {
-        const timeoutLimit = 15000  // 15 seconds
+        const timeoutLimit = 10000  // 10 seconds
         timeoutId = setTimeout(() => {
           clearTimeout(intervalId)
           intervalId = -1

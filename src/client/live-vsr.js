@@ -2,8 +2,6 @@ class VideoSpeechRecognition {
 
   constructor (media, options) {
     let defaults = {
-      mode: VideoSpeechRecognition.Mode.Live,
-
       tracks: {
         metadata: {
           initial: 'hidden'
@@ -20,13 +18,6 @@ class VideoSpeechRecognition {
     this._started    = false
     this._media      = media
     this._textTracks = {}
-  }
-
-  static get Mode() {
-    return {
-      Live: 0,
-      VOD : 1   // Will not prune buffer if used. Potential memory problems tho?
-    }
   }
 
   start () {
@@ -49,20 +40,10 @@ class VideoSpeechRecognition {
       [VSR] processTranscriptionForRange | translated and added cues from transcript for time range
       start: ${range.start} | end: ${range.end}
     `)
-
-    // if (this._options.mode === VideoSpeechRecognition.Mode.Live) {
-    //   console.info('[VSR] processTranscriptionForRange | live mode, pruning old cues')
-    //   this._pruneOOWCues()
-    // }
   }
 
   _translateTranscriptToCues (recognitionResponse, range) {
-    if (recognitionResponse && !recognitionResponse.hasOwnProperty('results')) return
-
-    // Flattening down to a single dimensional array of transcript objects
-    let transcripts = recognitionResponse.results
-      .map(report => report.alternatives)
-      .reduce((acc, val) => acc.concat(val), [])
+    let { words: transcript, confidence } = recognitionResponse
 
     const VTTCue = window.VTTCue || window.TextTrackCue
 
@@ -72,44 +53,42 @@ class VideoSpeechRecognition {
     let numPerGroup = 10
     let cueGroups = []
 
-    transcripts.forEach(transcript => {
-      this._processConfidenceScore(transcript.confidence, range)
+    this._processConfidenceScore(confidence, range)
 
-      let cues = transcript.words
-        .map(structuredWord => {
-          let start = range.start + this._fromStructuredNanoTime(structuredWord.start_time)
-          let end = range.start + this._fromStructuredNanoTime(structuredWord.end_time)
+    let cues = transcript
+      .map(structuredWord => {
+        let start = range.start + this._fromStructuredNanoTime(structuredWord.start)
+        let end = range.start + this._fromStructuredNanoTime(structuredWord.end)
 
-          return { start, end, word: structuredWord.word }
-        })
+        return { start, end, word: structuredWord.word }
+      })
 
-      let i = 0
-      let cuesCount = cues.length
-      // let expectedNumOfGroups = Math.floor( cuesCount / numPerGroup )
-      let group = []
+    let i = 0
+    let cuesCount = cues.length
+    // let expectedNumOfGroups = Math.floor( cuesCount / numPerGroup )
+    let group = []
 
-      do {
-        let cue = cues.shift()
-        let next = cues[0]
+    do {
+      let cue = cues.shift()
+      let next = cues[0]
 
-        if (cue)
-          group.push(cue)
+      if (cue)
+        group.push(cue)
 
-        let isLast = ( cue && !next )
+      let isLast = ( cue && !next )
 
-        if (!cue || isLast || group.length === numPerGroup) {
-          let groupClone = group.slice(0)
-          cueGroups.push(groupClone)
-          group.length = 0
-        }
+      if (!cue || isLast || group.length === numPerGroup) {
+        let groupClone = group.slice(0)
+        cueGroups.push(groupClone)
+        group.length = 0
+      }
 
-        if (!cue)
-          break
+      if (!cue)
+        break
 
-        i++
+      i++
 
-      } while (i < cuesCount)
-    })
+    } while (i < cuesCount)
 
     // Averaging out the start/end times to group words together, as nanosecond accuracy causes words to appear 1-by-1 very quickly
     cueGroups.forEach(group => {
@@ -151,13 +130,6 @@ class VideoSpeechRecognition {
       result += ( ( nanos / 1000000 ) / 1000 )
 
     return result
-  }
-
-  /**
-   * Removes cues that are outside the sliding window ( plus a configurable offset )
-   */
-  _pruneOOWCues () {
-    // TODO
   }
 
   _configureTextTracks () {
