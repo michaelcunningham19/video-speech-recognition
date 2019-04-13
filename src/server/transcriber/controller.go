@@ -1,157 +1,199 @@
 package transcriber
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"server/transcriber/recognizers"
+	"server/transcriber/recognizers/gcp"
+	"server/transcriber/utils"
 	"strings"
-
-	speech "cloud.google.com/go/speech/apiv1"
-	"github.com/fsnotify/fsnotify"
-	speechpb "google.golang.org/genproto/googleapis/cloud/speech/v1"
 )
-
-var transcriptionHistory map[string]bool
-
-// State ...
-type State struct {
-	encoder string
-}
 
 var state = State{}
 
-// Transcriber ...
-func Transcriber(encoder string) {
-	state.encoder = encoder
-
-	transcriptionHistory = make(map[string]bool)
-
-	// creates a new file watcher
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		fmt.Println("[transcriber] could not create new watcher: ", err)
-		return
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		fmt.Println("[transcriber] error Getwd(), err: ", err)
-		return
-	}
-
-	defer watcher.Close()
-
-	done := make(chan bool)
-
-	go func() {
-		var ready = false
-
-		for {
-			select {
-			// watch for events
-			case event := <-watcher.Events:
-
-				var shouldProcessAudio = ready && event.Op == fsnotify.Write && strings.Contains(event.Name, ".m4s") && !strings.Contains(event.Name, ".json")
-				if shouldProcessAudio {
-					segment := event.Name
-					if !transcriptionHistory[segment] {
-						transcriptionHistory[segment] = true
-						processAudio(segment)
-					} else {
-						fmt.Println("[transcriber] Skipping processing of segment: ", segment)
-					}
-				}
-
-				if event.Op == fsnotify.Create {
-
-					// Hack, plz remove me
-					if !ready {
-						if strings.Contains(event.Name, "\\tmp\\content\\0") {
-
-							fmt.Println("[transcriber] adding new watch folder: ", wd+"\\tmp\\content\\0\\")
-							if err := watcher.Add(wd + "\\tmp\\content\\0\\"); err != nil {
-								fmt.Println("[transcriber] error adding content watcher: ", err)
-							}
-
-							// TODO remove original watcher
-
-							ready = true
-						}
-					}
-
-				}
-
-				// Cleanup out-of-window working files as
-				// it ensures the ability to re-encode from working files if
-				// a problem is encountered in the first pass
-				if event.Op == fsnotify.Remove {
-					cleanupForFragment(event.Name)
-				}
-
-			case err := <-watcher.Errors:
-				fmt.Println("[transcriber] fsnotify error: ", err)
-			}
-		}
-	}()
-
-	if err := watcher.Add(wd + "\\tmp\\content\\"); err != nil {
-		fmt.Println("[transcriber] error adding initial watcher", err)
-	}
-
-	<-done
-}
-
-func processAudio(segmentPath string) {
-	fmt.Println("[processAudio] for: ", segmentPath)
-	_, segmentFilename := filepath.Split(segmentPath)
-
+// Start ...
+func Start(encoder string) {
 	wd, err := os.Getwd()
 	if err != nil {
 		fmt.Println("[processAudio] error Getwd(), err: ", err)
+		panic(err)
+	}
+
+	state.encoder = encoder
+	state.recognizer = &gcp.Adapter{}
+	state.processing = false
+	state.pruning = false
+	state.dir = wd
+	state.playlistInfo = PlaylistInfo{
+		Init: SegmentInfo{
+			Filename: "",
+		},
+		Segments: make(map[string]SegmentInfo),
+	}
+
+	// Preparing the convert tmp dir
+	err = os.Mkdir(fmt.Sprintf("%s/encoder/tmp/convert", wd), 0644)
+	if err != nil {
+		fmt.Println("[Start] could not create tmp convert dir, retrying..", err)
+		utils.SetTimeout(func() {
+			Start(encoder)
+		}, 1000)
 		return
 	}
 
-	// TODO parameterize
-	err = fileExists("tmp")
-	if err != nil {
-		// TODO why 0777?
-		os.Mkdir("tmp", 0777)
-		fmt.Println("[processAudio] made tmp directory")
+	utils.SetInterval(processNewSegments, 1000, true)
+	utils.SetInterval(pruneOldTranscripts, 1000, true)
+}
+
+func processNewSegments() {
+	if state.processing {
+		fmt.Println("[processSegments] still processing...")
+		return
 	}
+
+	state.processing = true
+
+	files, err := ioutil.ReadDir(fmt.Sprintf("%s/encoder/tmp/content/0", state.dir))
+	if err != nil {
+		fmt.Println("[processSegments] could not read segment list")
+		state.processing = false
+		return
+	}
+
+	for _, fileInfo := range files {
+		filename := fileInfo.Name()
+
+		// Handle the init segment if it hasn't been handled yet
+		if state.playlistInfo.Init.Filename == "" && strings.Contains(filename, "init") {
+			fmt.Println("[processSegments] storing init filename: ", filename)
+			state.playlistInfo.Init.Filename = filename
+			continue
+		}
+
+		_, segmentKnown := state.playlistInfo.Segments[filename]
+		if segmentKnown {
+			// If it's not in an errored state, continue iterating
+			// This effectively allows us to "retry" a failed transcription for a specific segment
+			if state.playlistInfo.Segments[filename].State != "errored" {
+				continue
+			}
+		}
+
+		// TODO use WebVTT - no json condition needed
+		isAudio := strings.Contains(filename, ".m4s") && !strings.Contains(filename, ".json")
+		if isAudio {
+			fmt.Println("[processSegments] processing audio file... ", filename)
+
+			segment := SegmentInfo{
+				Filename: filename,
+				State:    "processing",
+			}
+
+			state.playlistInfo.Segments[filename] = segment
+
+			filepath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, filename)
+			err := processAudio(filepath)
+			if err != nil {
+				segment.State = "processed"
+			} else {
+				segment.State = "errored"
+			}
+
+			fmt.Println("[processSegments] processed audio file: ", filename)
+		} else {
+			// fmt.Println("[processSegments] ignoring non-audio file: ", filename)
+		}
+	}
+
+	state.processing = false
+}
+
+func pruneOldTranscripts() {
+	if state.pruning {
+		fmt.Println("[pruneOldTranscripts] still pruning...")
+		return
+	}
+
+	state.pruning = true
+
+	files, err := ioutil.ReadDir(fmt.Sprintf("%s/encoder/tmp/content/0", state.dir))
+	if err != nil {
+		fmt.Println("[pruneOldTranscripts] could not read segment list")
+		state.pruning = false
+		return
+	}
+
+	/* Scanning through the known segments - if a known segment doesn't exist in the latest files list, prune it */
+	toDelete := make([]string, 0)
+
+	for filename := range state.playlistInfo.Segments {
+		found := false
+
+		for _, fileInfo := range files {
+			if filename == fileInfo.Name() {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			// Not pruning this file
+			continue
+		}
+
+		transcriptPath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, fmt.Sprintf("%s.json", filename))
+		fmt.Println("[pruneOldTranscripts] removing: ", transcriptPath)
+
+		/* Removing the file */
+		os.Remove(transcriptPath)
+
+		/* Queuing to remove the reference */
+		toDelete = append(toDelete, filename)
+	}
+
+	for _, filename := range toDelete {
+		delete(state.playlistInfo.Segments, filename)
+	}
+
+	state.pruning = false
+}
+
+func processAudio(segmentPath string) error {
+	fmt.Println("[processAudio] for: ", segmentPath)
+	_, segmentFilename := filepath.Split(segmentPath)
 
 	// Reading the segment into memory
 	mdat, err := ioutil.ReadFile(segmentPath)
 	if err != nil {
 		fmt.Println("[processAudio] failed to read file: ", err)
-		return
+		return err
 	}
 
 	// Reading the init segment into memory
-	// TODO refactor so we don't assume the lowest quality level is 0, and the filename pattern
-	initSegmentPath := fmt.Sprintf("%v/tmp/content/0/init_0.mp4", wd)
+	initSegmentPath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, state.playlistInfo.Init.Filename)
 	init, err := ioutil.ReadFile(initSegmentPath)
 	if err != nil {
 		fmt.Println("[processAudio] failed to read init segment: ", err)
-		return
+		return err
 	}
 
 	blob := append(init, mdat...)
 
 	// TODO skip writing file, pass bytes directly to ffmpeg
-	inputMP4Path := fmt.Sprintf("%v/tmp/convert/input_%v.mp4", wd, segmentFilename)
+	inputMP4Path := fmt.Sprintf("%s/encoder/tmp/convert/input_%v.mp4", state.dir, segmentFilename)
 
 	err = ioutil.WriteFile(inputMP4Path, blob, 0777)
 	if err != nil {
 		fmt.Printf("[processAudio] Could not write input_%v.mp4, err: %v \n", segmentFilename, err)
-		return
+		return err
 	}
 
 	/* Extracting the audio stream from mp4 and converting to ogg */
-	outputOGGPath := fmt.Sprintf("%v/tmp/convert/output_%v.ogg", wd, segmentFilename)
+	outputOGGPath := fmt.Sprintf("%s/encoder/tmp/convert/output_%v.ogg", state.dir, segmentFilename)
 
 	cmd := exec.Command(
 		state.encoder,
@@ -167,48 +209,29 @@ func processAudio(segmentPath string) {
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("[processAudio] Could not extract audio stream from path %v , err: %v \n", inputMP4Path, err)
-		return
+		return err
 	}
 
 	data, err := ioutil.ReadFile(outputOGGPath)
 	if err != nil {
 		fmt.Println("[processAudio] Failed to read ogg file: ", outputOGGPath, err)
-		return
+		return err
 	}
 
-	ctx := context.Background()
-
-	client, err := speech.NewClient(ctx)
-	if err != nil {
-		fmt.Println("[processAudio] Could not create speech client: ", err)
-		return
-	}
-
-	// Detects speech in the audio file.
-	resp, err := client.Recognize(ctx, &speechpb.RecognizeRequest{
-		// TODO parameterize
-		Config: &speechpb.RecognitionConfig{
-			Encoding:                   speechpb.RecognitionConfig_OGG_OPUS,
-			SampleRateHertz:            16000,
-			LanguageCode:               "en-US",
-			Model:                      "video",
-			EnableWordTimeOffsets:      true,
-			EnableAutomaticPunctuation: true, // This flag only works on English content
-		},
-		Audio: &speechpb.RecognitionAudio{
-			AudioSource: &speechpb.RecognitionAudio_Content{Content: data},
-		},
-	})
-
+	resp, err := state.recognizer.Input(data)
 	if err != nil {
 		fmt.Println("[processAudio] Error transcribing audio data: ", err)
 	} else {
 		fmt.Println("[processAudio] Successfully transcribed audio for segment: ", segmentPath)
 		writeTranscriptionForSegment(resp, segmentPath)
 	}
+
+	cleanupForFragment(segmentPath)
+
+	return nil
 }
 
-func writeTranscriptionForSegment(data *speechpb.RecognizeResponse, path string) error {
+func writeTranscriptionForSegment(data recognizers.Response, path string) error {
 	fmt.Println("[writeTranscriptionForSegment] Transcription received: ", data)
 
 	filepath := fmt.Sprintf("%v.json", path)
@@ -227,25 +250,12 @@ func writeTranscriptionForSegment(data *speechpb.RecognizeResponse, path string)
 	return nil
 }
 
-func fileExists(path string) error {
-	_, err := os.Stat(path)
-
-	if os.IsNotExist(err) {
-		return err
-	}
-
-	return nil
-}
-
 func cleanupForFragment(fragFilepath string) {
-	segmentDir, segmentFilename := filepath.Split(fragFilepath)
+	_, segmentFilename := filepath.Split(fragFilepath)
 
-	transcriptionPath := fmt.Sprintf("%v/%v.json", segmentDir, segmentFilename)
+	tmpMP4Path := fmt.Sprintf("%s/encoder/tmp/convert/input_%v.mp4", state.dir, segmentFilename)
+	tmpOGGPath := fmt.Sprintf("%s/encoder/tmp/convert/output_%v.ogg", state.dir, segmentFilename)
 
-	tmpMP4Path := fmt.Sprintf("tmp/convert/input_%v.mp4", segmentFilename)
-	tmpOGGPath := fmt.Sprintf("tmp/convert/output_%v.ogg", segmentFilename)
-
-	os.Remove(transcriptionPath)
 	os.Remove(tmpMP4Path)
 	os.Remove(tmpOGGPath)
 }
