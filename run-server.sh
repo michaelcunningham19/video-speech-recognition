@@ -1,6 +1,6 @@
 #!/bin/bash
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/video-speech-recognition/credentials/gcp/service-account.json"
-export FFMPEG_PATH="/path/to/video-speech-recognition/bin/ffmpeg"
+export GOOGLE_APPLICATION_CREDENTIALS="C:\Users\micha\Development\video-speech-recognition\credentials\gcp\service-account.json"
+export FFMPEG_PATH="C:\Users\micha\Development\video-speech-recognition\bin\ffmpeg"
 
 rm ./bin/vsr_x64
 

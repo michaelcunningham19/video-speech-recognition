@@ -29,9 +29,12 @@ func Start(encoder string) {
 		return nil
 	}
 
-	if mode == "nvenc" {
+	switch mode {
+	case "nvenc":
 		strategy = strategies.NVENC
-	} else {
+	case "av1":
+		strategy = strategies.AV1
+	default:
 		strategy = strategies.X264
 	}
 

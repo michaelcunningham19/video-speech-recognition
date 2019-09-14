@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"server/encoder"
-	"server/transcriber"
 )
 
 var ffmpeg = os.Getenv("FFMPEG_PATH")
@@ -22,7 +21,6 @@ func main() {
 		fmt.Println("[main] could not remove encoder tmp directory: ", err)
 	}
 
-	go transcriber.Start(ffmpeg)
-
+	// go transcriber.Start(ffmpeg)
 	encoder.Start(ffmpeg)
 }
