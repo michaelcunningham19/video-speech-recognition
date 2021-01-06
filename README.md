@@ -6,14 +6,12 @@ This PoC was referenced in the blog post "_Live Adaptive Video Speech Recognitio
 
 
 ## Strategies
-There are examples of two implementations here - a client-focused one (under `./archive/`) and a server-focused one (under `./src`).
+A server-focused strategy is the preferred strategy that assumes you have direct access to the encoder (or only its output) for augmentation. Audio data is retrieved directly from the encoder output where it is then sent for transcription. Delivery of the transcripts can be performed in a number of ways, the most spec-compliant way would be live `WebVTT` segments.
 
-A server-focused strategy is one that has direct access to the encoder or only its output for augmentation. Audio data is retrieved directly from the encoder output where it is then sent for transcription. Delivery of the transcripts can be performed in a number of ways, the most spec-compliant way would be live `WebVTT` segments.
-
-A client-focused strategy can be implemented on any playback source but still has a small backend component in play. Audio data is sent from the client's browser to the backend component where it is then sent for transcription. Once the timed transcription is recieved, it is then translated to `WebVTT` cues to allow native rendering capabilities offered by the browser. An early PoC of this strategy can be found under `./archive`.
+A secondary strategy is a client-focused one. Which can be implemented on any playback source but still has a small backend component in use. Audio data is sent from the client's browser to the backend component where it is then sent for transcription. Once the timed transcription is recieved, it is then translated to `WebVTT` cues to allow native rendering capabilities offered by the browser. A very early PoC of this strategy can be found under `./archive` and is not recommended for use.
 
 ## Content Differences
-This PoC is designed to demonstrate live content, but it can be applied to work with VoD as well.
+This PoC is designed to demonstrate live content, but it can be applied to work with VoD as well (either on-the-fly or once)
 
 ------
 
