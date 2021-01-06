@@ -1,6 +1,7 @@
 package transcriber
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -16,18 +17,16 @@ import (
 var state = State{}
 
 // Start ...
-func Start(encoder string) {
-	wd, err := os.Getwd()
-	if err != nil {
-		fmt.Println("[processAudio] error Getwd(), err: ", err)
-		panic(err)
-	}
+func Start(encoderPath string, outputPath string, segmentsPath string) {
 
-	state.encoder = encoder
+	state.encoderPath = encoderPath
+	state.outputPath = outputPath
+	state.segmentsPath = segmentsPath
+
 	state.recognizer = &gcp.Adapter{}
 	state.processing = false
 	state.pruning = false
-	state.dir = wd
+
 	state.playlistInfo = PlaylistInfo{
 		Init: SegmentInfo{
 			Filename: "",
@@ -35,13 +34,10 @@ func Start(encoder string) {
 		Segments: make(map[string]SegmentInfo),
 	}
 
-	// Preparing the convert tmp dir
-	err = os.Mkdir(fmt.Sprintf("%s/encoder/tmp/convert", wd), 0644)
+	/* Creating the sub-dir for outputting transcription results */
+	err := os.MkdirAll(state.outputPath, 0777)
 	if err != nil {
-		fmt.Println("[Start] could not create tmp convert dir, retrying..", err)
-		utils.SetTimeout(func() {
-			Start(encoder)
-		}, 1000)
+		fmt.Printf("[Start] Could not create transcription output sub-dir in temporary output directory: %v", err)
 		return
 	}
 
@@ -57,7 +53,7 @@ func processNewSegments() {
 
 	state.processing = true
 
-	files, err := ioutil.ReadDir(fmt.Sprintf("%s/encoder/tmp/content/0", state.dir))
+	files, err := ioutil.ReadDir(state.segmentsPath)
 	if err != nil {
 		fmt.Println("[processSegments] could not read segment list")
 		state.processing = false
@@ -86,7 +82,7 @@ func processNewSegments() {
 		// TODO use WebVTT - no json condition needed
 		isAudio := strings.Contains(filename, ".m4s") && !strings.Contains(filename, ".json")
 		if isAudio {
-			fmt.Println("[processSegments] processing audio file... ", filename)
+			fmt.Printf("[processSegments] processing audio file: %s \n", filename)
 
 			segment := SegmentInfo{
 				Filename: filename,
@@ -95,7 +91,7 @@ func processNewSegments() {
 
 			state.playlistInfo.Segments[filename] = segment
 
-			filepath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, filename)
+			filepath := fmt.Sprintf("%s/%s", state.segmentsPath, filename)
 			err := processAudio(filepath)
 			if err != nil {
 				segment.State = "processed"
@@ -103,7 +99,7 @@ func processNewSegments() {
 				segment.State = "errored"
 			}
 
-			fmt.Println("[processSegments] processed audio file: ", filename)
+			fmt.Printf("[processSegments] processed audio file: %s \n", filename)
 		} else {
 			// fmt.Println("[processSegments] ignoring non-audio file: ", filename)
 		}
@@ -120,7 +116,7 @@ func pruneOldTranscripts() {
 
 	state.pruning = true
 
-	files, err := ioutil.ReadDir(fmt.Sprintf("%s/encoder/tmp/content/0", state.dir))
+	files, err := ioutil.ReadDir(state.segmentsPath)
 	if err != nil {
 		fmt.Println("[pruneOldTranscripts] could not read segment list")
 		state.pruning = false
@@ -145,7 +141,7 @@ func pruneOldTranscripts() {
 			continue
 		}
 
-		transcriptPath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, fmt.Sprintf("%s.json", filename))
+		transcriptPath := fmt.Sprintf("%s/%s", state.outputPath, fmt.Sprintf("%s.json", filename))
 		fmt.Println("[pruneOldTranscripts] removing: ", transcriptPath)
 
 		/* Removing the file */
@@ -174,7 +170,7 @@ func processAudio(segmentPath string) error {
 	}
 
 	// Reading the init segment into memory
-	initSegmentPath := fmt.Sprintf("%s/encoder/tmp/content/0/%s", state.dir, state.playlistInfo.Init.Filename)
+	initSegmentPath := fmt.Sprintf("%s/%s", state.segmentsPath, state.playlistInfo.Init.Filename)
 	init, err := ioutil.ReadFile(initSegmentPath)
 	if err != nil {
 		fmt.Println("[processAudio] failed to read init segment: ", err)
@@ -183,50 +179,37 @@ func processAudio(segmentPath string) error {
 
 	blob := append(init, mdat...)
 
-	// TODO skip writing file, pass bytes directly to ffmpeg
-	inputMP4Path := fmt.Sprintf("%s/encoder/tmp/convert/input_%v.mp4", state.dir, segmentFilename)
-
-	err = ioutil.WriteFile(inputMP4Path, blob, 0777)
-	if err != nil {
-		fmt.Printf("[processAudio] Could not write input_%v.mp4, err: %v \n", segmentFilename, err)
-		return err
-	}
-
 	/* Extracting the audio stream from mp4 and converting to ogg */
-	outputOGGPath := fmt.Sprintf("%s/encoder/tmp/convert/output_%v.ogg", state.dir, segmentFilename)
-
 	cmd := exec.Command(
-		state.encoder,
-		"-i", inputMP4Path,
+		state.encoderPath,
+		"-i", "pipe:0",
+		"-f", "opus",  // Providing a format hint since ffmpeg cannot detect the format through conventional means (e.g. filename extension sniffing)
 		"-vn",
 		"-acodec", "libopus",
 		"-b:a", "64k",
 		"-ar", "16000",
 		"-ac", "1",
-		outputOGGPath,
+		"pipe:1",
 	)
+
+	var outb bytes.Buffer
+
+	cmd.Stdin = bytes.NewReader(blob)
+	cmd.Stdout = &outb
 
 	err = cmd.Run()
 	if err != nil {
-		fmt.Printf("[processAudio] Could not extract audio stream from path %v , err: %v \n", inputMP4Path, err)
+		fmt.Printf("[processAudio] Could not extract audio stream, err: %v \n", err)
 		return err
 	}
 
-	data, err := ioutil.ReadFile(outputOGGPath)
-	if err != nil {
-		fmt.Println("[processAudio] Failed to read ogg file: ", outputOGGPath, err)
-		return err
-	}
-
-	resp, err := state.recognizer.Input(data)
+	resp, err := state.recognizer.Input(outb.Bytes())
 	if err != nil {
 		fmt.Println("[processAudio] Error transcribing audio data: ", err)
 	} else {
 		fmt.Println("[processAudio] Successfully transcribed audio for segment: ", segmentPath)
-		writeTranscriptionForSegment(resp, segmentPath)
+		writeTranscriptionForSegment(resp, fmt.Sprintf("%s/%s", state.outputPath, segmentFilename))
 	}
-
-	cleanupForFragment(segmentPath)
 
 	return nil
 }
@@ -241,6 +224,7 @@ func writeTranscriptionForSegment(data recognizers.Response, path string) error 
 		return err
 	}
 
+	fmt.Printf("[writeTranscriptionForSegment] Writing transcription to %s", filepath)
 	err = ioutil.WriteFile(filepath, raw, 0644)
 	if err != nil {
 		fmt.Printf("[writeTranscriptionForSegment] Could not write to path %v, error was %v \n", filepath, err)
@@ -248,14 +232,4 @@ func writeTranscriptionForSegment(data recognizers.Response, path string) error 
 	}
 
 	return nil
-}
-
-func cleanupForFragment(fragFilepath string) {
-	_, segmentFilename := filepath.Split(fragFilepath)
-
-	tmpMP4Path := fmt.Sprintf("%s/encoder/tmp/convert/input_%v.mp4", state.dir, segmentFilename)
-	tmpOGGPath := fmt.Sprintf("%s/encoder/tmp/convert/output_%v.ogg", state.dir, segmentFilename)
-
-	os.Remove(tmpMP4Path)
-	os.Remove(tmpOGGPath)
 }

@@ -18,7 +18,6 @@ func X264(ffmpeg, source, segmentFilename, outputPath string) *exec.Cmd {
 		"-x264opts", "keyint=60:no-scenecut",
 		"-profile:v", "high",
 		"-level", "4.1",
-		"-tune", "zerolatency",
 		"-segment_list_flags", "live",
 		"-flags", "+cgop",
 		"-preset", "veryfast",

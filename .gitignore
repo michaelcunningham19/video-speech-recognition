@@ -1,2 +1,3 @@
+**/*/.DS_Store
 bin/
-src/server/encoder/tmp
+src/server/_tmp

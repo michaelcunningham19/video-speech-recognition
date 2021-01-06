@@ -1,0 +1,11 @@
+{
+  "name": "video-speech-recognition",
+  "version": "0.0.0",
+  "description": "Client portion of the video speech recognition POC",
+  "scripts": {
+    "start:client": "npx http-server --port 12000 --cors -c 0 -o /src/client/index.html",
+    "start:server": "./src/server/run.sh"
+  },
+  "author": "Michael Cunningham",
+  "license": "MIT"
+}

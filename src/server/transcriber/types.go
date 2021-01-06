@@ -18,10 +18,11 @@ type PlaylistInfo struct {
 
 // State ...
 type State struct {
-	encoder      string
+	encoderPath  string
+	outputPath   string
+	segmentsPath string
 	recognizer   recognizers.Adapter
 	processing   bool
 	pruning      bool
 	playlistInfo PlaylistInfo
-	dir          string
 }

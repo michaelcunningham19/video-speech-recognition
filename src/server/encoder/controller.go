@@ -5,26 +5,18 @@ import (
 	"os"
 	"os/exec"
 	"server/encoder/strategies"
-	"server/transcriber/utils"
 )
 
 // Start ...
-func Start(encoder string) {
+func Start(encoderPath string, outputPath string) {
 
-	source := "" // Path to video input source
-	outputDirectory := "./encoder/tmp/content/"
-	outputPath := outputDirectory + "%v/playlist.m3u8"
-
-	segmentFilename := outputDirectory + "%v/%04d.m4s"
+	streamSource := "https://live.corusdigitaldev.com/groupd/live/49a91e7f-1023-430f-8d66-561055f3d0f7/live.isml/live-audio_1=96000-video=2499968.m3u8" // Path to video input source
+	streamOutputPath := outputPath + "/%v/playlist.m3u8"
+	segmentFilenamePattern := outputPath + "/%v/%04d.m4s"  // Deliberate template variable for ffmpeg's use.
 
 	mode := "x264"
 
-	err := utils.FileExists(outputDirectory)
-	if err != nil {
-		fmt.Println("[Start] removing pre-existing output directory")
-		os.Remove(outputDirectory)
-	}
-
+	/* Default strategy - no-op */
 	strategy := func(string, string, string, string) *exec.Cmd {
 		return nil
 	}
@@ -35,18 +27,16 @@ func Start(encoder string) {
 		strategy = strategies.X264
 	}
 
-	cmd := strategy(encoder, source, segmentFilename, outputPath)
+	cmd := strategy(encoderPath, streamSource, segmentFilenamePattern, streamOutputPath)
 
 	//
 	// TODO better logging
 	//
-
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
-		fmt.Println("[main] could not start encoder, err: ", err)
+		fmt.Println("[main] Could not start encoder, err: ", err)
 	}
-
 }

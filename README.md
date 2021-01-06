@@ -32,8 +32,8 @@ It's required to have a GCP service account setup
 https://cloud.google.com/video-intelligence/docs/common/auth
 
 Tested on:
-- macOS 10.14 Mojave w/ `ffmpeg` 4.1.1
-- Windows 10 x64 w/ `ffmpeg` 4.1.1
+- macOS 11.1 Big Sur w/ `ffmpeg` 4.3.1
+- Windows 10 x64 w/ `ffmpeg` 4.3.1
 
 Steps:
 1) Place `ffmpeg` binary in a new directory `bin`
@@ -42,7 +42,7 @@ Steps:
 
   - Provide playback source URL in `src/server/encoder/controller.go`
   - (optional) tweak encoding profile (e.g. x264 -> `src/server/encoder/strategies/x264.go`)
-  - Run `run-client.sh` and `run-server.sh`
+  - Run `npm run start:client` and `npm run start:server`
 
 ## Known Issues
 - Error handling - more testing needed, could crash the application
@@ -50,7 +50,6 @@ Steps:
 ## Roadmap
 - Integration of Microsoft's Speech-to-Text API, see issue https://github.com/michaelcunningham19/video-speech-recognition/issues/2
 - Live WebVTT support for server strategy example, currently using a custom delivery method for initial phase.
-- Pass data with `ffmpeg` via stdin/out rather than writing/reading to disk
 - Allow `ffmpeg` arguments to be provided via external source
 - First class VOD support
 - Published go module

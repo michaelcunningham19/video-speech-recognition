@@ -42,12 +42,12 @@
 </head>
 <body>
 
-  <h1>Live Adaptive Video Speech Recognition - Server Strategy</h1>
+  <h1>Live Adaptive Video Speech Recognition</h1>
   <video controls></video>
 
   <div class="controls">
     <label for="playback-source">Playback Source</label>
-    <input name="playback-source" type="text" placeholder="Enter an HLS playback source" value="../server/encoder/tmp/content/master.m3u8">
+    <input name="playback-source" type="text" placeholder="Enter an HLS playback source" value="/src/server/_tmp/master.m3u8">
     <button name="load">Load</button>
   </div>
 
@@ -136,7 +136,7 @@
 
     function getTranscriptForFragment(fragment) {
       // TODO refactor me
-      const finalUrl = `http://localhost:12000/src/server/encoder/tmp/content/0/${fragment.relurl}.json`
+      const finalUrl = `http://localhost:12000/src/server/_tmp/text/${fragment.relurl}.json`
 
       let intervalId = -1;
       let timeoutId = -1
